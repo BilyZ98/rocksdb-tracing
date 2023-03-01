@@ -6,9 +6,11 @@
 #pragma once
 
 #include <cinttypes>
+#include <memory>
 
-#include "cache/cache_helpers.h"
 #include "cache/cache_key.h"
+#include "cache/typed_cache.h"
+#include "db/blob/blob_contents.h"
 #include "db/blob/blob_file_cache.h"
 #include "db/blob/blob_read_request.h"
 #include "rocksdb/cache.h"
@@ -102,20 +104,34 @@ class BlobSource {
   inline Cache* GetBlobCache() const { return blob_cache_.get(); }
 
   bool TEST_BlobInCache(uint64_t file_number, uint64_t file_size,
-                        uint64_t offset) const;
+                        uint64_t offset, size_t* charge = nullptr) const;
+
+  // For TypedSharedCacheInterface
+  void Create(BlobContents** out, const char* buf, size_t size,
+              MemoryAllocator* alloc);
+
+  using SharedCacheInterface =
+      FullTypedSharedCacheInterface<BlobContents, BlobContentsCreator>;
+  using TypedHandle = SharedCacheInterface::TypedHandle;
 
  private:
   Status GetBlobFromCache(const Slice& cache_key,
-                          CacheHandleGuard<std::string>* blob) const;
+                          CacheHandleGuard<BlobContents>* cached_blob) const;
 
   Status PutBlobIntoCache(const Slice& cache_key,
-                          CacheHandleGuard<std::string>* cached_blob,
-                          PinnableSlice* blob) const;
+                          std::unique_ptr<BlobContents>* blob,
+                          CacheHandleGuard<BlobContents>* cached_blob) const;
 
-  Cache::Handle* GetEntryFromCache(const Slice& key) const;
+  static void PinCachedBlob(CacheHandleGuard<BlobContents>* cached_blob,
+                            PinnableSlice* value);
 
-  Status InsertEntryIntoCache(const Slice& key, std::string* value,
-                              size_t charge, Cache::Handle** cache_handle,
+  static void PinOwnedBlob(std::unique_ptr<BlobContents>* owned_blob,
+                           PinnableSlice* value);
+
+  TypedHandle* GetEntryFromCache(const Slice& key) const;
+
+  Status InsertEntryIntoCache(const Slice& key, BlobContents* value,
+                              TypedHandle** cache_handle,
                               Cache::Priority priority) const;
 
   inline CacheKey GetCacheKey(uint64_t file_number, uint64_t /*file_size*/,
@@ -123,14 +139,6 @@ class BlobSource {
     OffsetableCacheKey base_cache_key(db_id_, db_session_id_, file_number);
     return base_cache_key.WithOffset(offset);
   }
-
-  // Callbacks for secondary blob cache
-  static size_t SizeCallback(void* obj);
-
-  static Status SaveToCallback(void* from_obj, size_t from_offset,
-                               size_t length, void* out);
-
-  static Cache::CacheItemHelper* GetCacheItemHelper();
 
   const std::string& db_id_;
   const std::string& db_session_id_;
@@ -141,7 +149,7 @@ class BlobSource {
   BlobFileCache* blob_file_cache_;
 
   // A cache to store uncompressed blobs.
-  std::shared_ptr<Cache> blob_cache_;
+  mutable SharedCacheInterface blob_cache_;
 
   // The control option of how the cache tiers will be used. Currently rocksdb
   // support block/blob cache (volatile tier) and secondary cache (this tier

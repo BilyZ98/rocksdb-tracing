@@ -15,14 +15,15 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/status.h"
 #include "util/compression.h"
+#include "util/mutexlock.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 class CompressedSecondaryCacheResultHandle : public SecondaryCacheResultHandle {
  public:
-  CompressedSecondaryCacheResultHandle(void* value, size_t size)
+  CompressedSecondaryCacheResultHandle(Cache::ObjectPtr value, size_t size)
       : value_(value), size_(size) {}
-  virtual ~CompressedSecondaryCacheResultHandle() override = default;
+  ~CompressedSecondaryCacheResultHandle() override = default;
 
   CompressedSecondaryCacheResultHandle(
       const CompressedSecondaryCacheResultHandle&) = delete;
@@ -33,19 +34,33 @@ class CompressedSecondaryCacheResultHandle : public SecondaryCacheResultHandle {
 
   void Wait() override {}
 
-  void* Value() override { return value_; }
+  Cache::ObjectPtr Value() override { return value_; }
 
   size_t Size() override { return size_; }
 
  private:
-  void* value_;
+  Cache::ObjectPtr value_;
   size_t size_;
 };
 
 // The CompressedSecondaryCache is a concrete implementation of
 // rocksdb::SecondaryCache.
 //
-// Users can also cast a pointer to it and call methods on
+// When a block is found from CompressedSecondaryCache::Lookup, we check whether
+// there is a dummy block with the same key in the primary cache.
+// 1. If the dummy block exits, we erase the block from
+//    CompressedSecondaryCache and insert it into the primary cache.
+// 2. If not, we just insert a dummy block into the primary cache
+//    (charging the actual size of the block) and don not erase the block from
+//    CompressedSecondaryCache. A standalone handle is returned to the caller.
+//
+// When a block is evicted from the primary cache, we check whether
+// there is a dummy block with the same key in CompressedSecondaryCache.
+// 1. If the dummy block exits, the block is inserted into
+//    CompressedSecondaryCache.
+// 2. If not, we just insert a dummy block (size 0) in CompressedSecondaryCache.
+//
+// Users can also cast a pointer to CompressedSecondaryCache and call methods on
 // it directly, especially custom methods that may be added
 // in the future.  For example -
 // std::unique_ptr<rocksdb::SecondaryCache> cache =
@@ -62,30 +77,38 @@ class CompressedSecondaryCache : public SecondaryCache {
       CacheMetadataChargePolicy metadata_charge_policy =
           kDefaultCacheMetadataChargePolicy,
       CompressionType compression_type = CompressionType::kLZ4Compression,
-      uint32_t compress_format_version = 2);
-  virtual ~CompressedSecondaryCache() override;
+      uint32_t compress_format_version = 2,
+      bool enable_custom_split_merge = false,
+      const CacheEntryRoleSet& do_not_compress_roles = {
+          CacheEntryRole::kFilterBlock});
+  ~CompressedSecondaryCache() override;
 
   const char* Name() const override { return "CompressedSecondaryCache"; }
 
-  Status Insert(const Slice& key, void* value,
+  Status Insert(const Slice& key, Cache::ObjectPtr value,
                 const Cache::CacheItemHelper* helper) override;
 
   std::unique_ptr<SecondaryCacheResultHandle> Lookup(
-      const Slice& key, const Cache::CreateCallback& create_cb, bool /*wait*/,
+      const Slice& key, const Cache::CacheItemHelper* helper,
+      Cache::CreateContext* create_context, bool /*wait*/, bool advise_erase,
       bool& is_in_sec_cache) override;
+
+  bool SupportForceErase() const override { return true; }
 
   void Erase(const Slice& key) override;
 
   void WaitAll(std::vector<SecondaryCacheResultHandle*> /*handles*/) override {}
 
+  Status SetCapacity(size_t capacity) override;
+
+  Status GetCapacity(size_t& capacity) override;
+
   std::string GetPrintableOptions() const override;
 
  private:
   friend class CompressedSecondaryCacheTest;
-  static constexpr std::array<uint16_t, 33> malloc_bin_sizes_{
-      32,   64,   96,   128,  160,  192,  224,   256,   320,   384,   448,
-      512,  640,  768,  896,  1024, 1280, 1536,  1792,  2048,  2560,  3072,
-      3584, 4096, 5120, 6144, 7168, 8192, 10240, 12288, 14336, 16384, 32768};
+  static constexpr std::array<uint16_t, 8> malloc_bin_sizes_{
+      128, 256, 512, 1024, 2048, 4096, 8192, 16384};
 
   struct CacheValueChunk {
     // TODO try "CacheAllocationPtr next;".
@@ -101,7 +124,7 @@ class CompressedSecondaryCache : public SecondaryCache {
   // are stored in CacheValueChunk and extra charge is needed for each chunk,
   // so the cache charge is recalculated here.
   CacheValueChunk* SplitValueIntoChunks(const Slice& value,
-                                        const CompressionType compression_type,
+                                        CompressionType compression_type,
                                         size_t& charge);
 
   // After merging chunks, the extra charge for each chunk is removed, so
@@ -109,10 +132,11 @@ class CompressedSecondaryCache : public SecondaryCache {
   CacheAllocationPtr MergeChunksIntoValue(const void* chunks_head,
                                           size_t& charge);
 
-  // An implementation of Cache::DeleterFn.
-  static void DeletionCallback(const Slice& /*key*/, void* obj);
+  // TODO: clean up to use cleaner interfaces in typed_cache.h
+  const Cache::CacheItemHelper* GetHelper(bool enable_custom_split_merge) const;
   std::shared_ptr<Cache> cache_;
   CompressedSecondaryCacheOptions cache_options_;
+  mutable port::Mutex capacity_mutex_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

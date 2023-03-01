@@ -7,11 +7,13 @@
 
 #include <cassert>
 
+#include "db/blob/blob_contents.h"
 #include "db/blob/blob_file_addition.h"
 #include "db/blob/blob_file_completion_callback.h"
 #include "db/blob/blob_index.h"
 #include "db/blob/blob_log_format.h"
 #include "db/blob/blob_log_writer.h"
+#include "db/blob/blob_source.h"
 #include "db/event_helpers.h"
 #include "db/version_set.h"
 #include "file/filename.h"
@@ -392,7 +394,7 @@ Status BlobFileBuilder::PutBlobIntoCacheIfNeeded(const Slice& blob,
                                                  uint64_t blob_offset) const {
   Status s = Status::OK();
 
-  auto blob_cache = immutable_options_->blob_cache;
+  BlobSource::SharedCacheInterface blob_cache{immutable_options_->blob_cache};
   auto statistics = immutable_options_->statistics.get();
   bool warm_cache =
       prepopulate_blob_cache_ == PrepopulateBlobCache::kFlushOnly &&
@@ -406,22 +408,12 @@ Status BlobFileBuilder::PutBlobIntoCacheIfNeeded(const Slice& blob,
 
     const Cache::Priority priority = Cache::Priority::BOTTOM;
 
-    // Objects to be put into the cache have to be heap-allocated and
-    // self-contained, i.e. own their contents. The Cache has to be able to
-    // take unique ownership of them. Therefore, we copy the blob into a
-    // string directly, and insert that into the cache.
-    std::unique_ptr<std::string> buf = std::make_unique<std::string>();
-    buf->assign(blob.data(), blob.size());
+    s = blob_cache.InsertSaved(key, blob, nullptr /*context*/, priority,
+                               immutable_options_->lowest_used_cache_tier);
 
-    // TODO: support custom allocators and provide a better estimated memory
-    // usage using malloc_usable_size.
-    s = blob_cache->Insert(key, buf.get(), buf->size(),
-                           &DeleteCacheEntry<std::string>,
-                           nullptr /* cache_handle */, priority);
     if (s.ok()) {
       RecordTick(statistics, BLOB_DB_CACHE_ADD);
-      RecordTick(statistics, BLOB_DB_CACHE_BYTES_WRITE, buf->size());
-      buf.release();
+      RecordTick(statistics, BLOB_DB_CACHE_BYTES_WRITE, blob.size());
     } else {
       RecordTick(statistics, BLOB_DB_CACHE_ADD_FAILURES);
     }

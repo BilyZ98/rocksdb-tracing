@@ -3,7 +3,6 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
-#ifndef ROCKSDB_LITE
 
 #include "rocksdb/utilities/debug.h"
 
@@ -78,11 +77,9 @@ Status GetAllKeyVersions(DB* db, ColumnFamilyHandle* cfh, Slice begin_key,
   DBImpl* idb = static_cast<DBImpl*>(db->GetRootDB());
   auto icmp = InternalKeyComparator(idb->GetOptions(cfh).comparator);
   ReadOptions read_options;
-  ReadRangeDelAggregator range_del_agg(&icmp,
-                                       kMaxSequenceNumber /* upper_bound */);
   Arena arena;
-  ScopedArenaIterator iter(idb->NewInternalIterator(
-      read_options, &arena, &range_del_agg, kMaxSequenceNumber, cfh));
+  ScopedArenaIterator iter(
+      idb->NewInternalIterator(read_options, &arena, kMaxSequenceNumber, cfh));
 
   if (!begin_key.empty()) {
     InternalKey ikey;
@@ -119,4 +116,3 @@ Status GetAllKeyVersions(DB* db, ColumnFamilyHandle* cfh, Slice begin_key,
 
 }  // namespace ROCKSDB_NAMESPACE
 
-#endif  // ROCKSDB_LITE

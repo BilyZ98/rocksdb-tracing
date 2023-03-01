@@ -16,7 +16,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#ifndef ROCKSDB_LITE
 
 DBImplReadOnly::DBImplReadOnly(const DBOptions& db_options,
                                const std::string& dbname)
@@ -143,8 +142,7 @@ Iterator* DBImplReadOnly::NewIterator(const ReadOptions& read_options,
       super_version->version_number, read_callback);
   auto internal_iter = NewInternalIterator(
       db_iter->GetReadOptions(), cfd, super_version, db_iter->GetArena(),
-      db_iter->GetRangeDelAggregator(), read_seq,
-      /* allow_unprepared_value */ true);
+      read_seq, /* allow_unprepared_value */ true, db_iter);
   db_iter->SetIterUnderDBIter(internal_iter);
   return db_iter;
 }
@@ -194,9 +192,8 @@ Status DBImplReadOnly::NewIterators(
         sv->mutable_cf_options.max_sequential_skip_in_iterations,
         sv->version_number, read_callback);
     auto* internal_iter = NewInternalIterator(
-        db_iter->GetReadOptions(), cfd, sv, db_iter->GetArena(),
-        db_iter->GetRangeDelAggregator(), read_seq,
-        /* allow_unprepared_value */ true);
+        db_iter->GetReadOptions(), cfd, sv, db_iter->GetArena(), read_seq,
+        /* allow_unprepared_value */ true, db_iter);
     db_iter->SetIterUnderDBIter(internal_iter);
     iterators->push_back(db_iter);
   }
@@ -323,21 +320,5 @@ Status DBImplReadOnly::OpenForReadOnlyWithoutCheck(
   return s;
 }
 
-#else   // !ROCKSDB_LITE
-
-Status DB::OpenForReadOnly(const Options& /*options*/,
-                           const std::string& /*dbname*/, DB** /*dbptr*/,
-                           bool /*error_if_wal_file_exists*/) {
-  return Status::NotSupported("Not supported in ROCKSDB_LITE.");
-}
-
-Status DB::OpenForReadOnly(
-    const DBOptions& /*db_options*/, const std::string& /*dbname*/,
-    const std::vector<ColumnFamilyDescriptor>& /*column_families*/,
-    std::vector<ColumnFamilyHandle*>* /*handles*/, DB** /*dbptr*/,
-    bool /*error_if_wal_file_exists*/) {
-  return Status::NotSupported("Not supported in ROCKSDB_LITE.");
-}
-#endif  // !ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -5,7 +5,6 @@
 
 #pragma once
 
-#ifndef ROCKSDB_LITE
 
 #include <string>
 #include <vector>
@@ -47,6 +46,7 @@ class LogReaderContainer {
     delete reporter_;
     delete status_;
   }
+
  private:
   struct LogReporter : public log::Reader::Reporter {
     Env* env;
@@ -71,6 +71,7 @@ class LogReaderContainer {
 // The secondary instance can be opened using `DB::OpenAsSecondary`. After
 // that, it can call `DBImplSecondary::TryCatchUpWithPrimary` to make best
 // effort attempts to catch up with the primary.
+// TODO: Share common structure with CompactedDBImpl and DBImplReadOnly
 class DBImplSecondary : public DBImpl {
  public:
   DBImplSecondary(const DBOptions& options, const std::string& dbname,
@@ -246,7 +247,6 @@ class DBImplSecondary : public DBImpl {
   // method can take long time due to all the I/O and CPU costs.
   Status TryCatchUpWithPrimary() override;
 
-
   // Try to find log reader using log_number from log_readers_ map, initialize
   // if it doesn't exist
   Status MaybeInitLogReader(uint64_t log_number,
@@ -268,6 +268,11 @@ class DBImplSecondary : public DBImpl {
 #endif  // NDEBUG
 
  protected:
+  Status FlushForGetLiveFiles() override {
+    // No-op for read-only DB
+    return Status::OK();
+  }
+
   // ColumnFamilyCollector is a write batch handler which does nothing
   // except recording unique column family IDs
   class ColumnFamilyCollector : public WriteBatch::Handler {
@@ -399,4 +404,3 @@ class DBImplSecondary : public DBImpl {
 
 }  // namespace ROCKSDB_NAMESPACE
 
-#endif  // !ROCKSDB_LITE
